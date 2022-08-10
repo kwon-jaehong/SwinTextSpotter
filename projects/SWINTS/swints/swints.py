@@ -246,7 +246,7 @@ class SWINTS(nn.Module):
             features.append(feature)
         
         
-        ## 스윈트랜스포머에서 뽑아온 피쳐(features)를 p2,p3,p4를 평균값 취함
+        ## 스윈트랜스포머에서 뽑아온 피쳐(features)를 p2,p3,p4,p5,p6를 평균값 취함
         ## proposal_feats임 -> 포지션 임베딩까지 더해줘야함
         ## 초기화는 이미지 피쳐를 평균값 + 더함 -> 복사 
         img_feats = self.IFE(features)
