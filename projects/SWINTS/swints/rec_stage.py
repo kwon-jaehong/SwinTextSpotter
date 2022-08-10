@@ -124,6 +124,8 @@ class REC_STAGE(nn.Module):
             features.append(k)
         n,c,h,w = k.size()
         k = k.view(n, c, -1).permute(2, 0, 1)
+        
+        
        # self_att.
         pro_features = pro_features.view(N, nr_boxes, self.d_model).permute(1, 0, 2)
         pro_features2 = self.self_attn(pro_features, pro_features, value=pro_features)[0]
@@ -183,6 +185,7 @@ class REC_STAGE(nn.Module):
         k_rec = k_rec*gt_masks
         attn_vecs = self.seq_decoder(k_rec, targets, targets)
         return attn_vecs
+    
 
 def encoder_layer(in_c, out_c, k=3, s=2, p=1):
     return nn.Sequential(nn.Conv2d(in_c, out_c, k, s, p),

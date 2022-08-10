@@ -311,6 +311,9 @@ class DefaultTrainer(TrainerBase):
         optimizer = self.build_optimizer(cfg, model)
         data_loader = self.build_train_loader(cfg)
 
+        from torchinfo import summary
+        # summary(model,1,3,256,256)
+        
         # For training, wrap with DDP. But don't need this for inference.
         if comm.get_world_size() > 1:
             model = DistributedDataParallel(
@@ -320,6 +323,8 @@ class DefaultTrainer(TrainerBase):
             model, data_loader, optimizer
         )
 
+
+        
         self.scheduler = self.build_lr_scheduler(cfg, optimizer)
         # Assume no other objects need to be checkpointed.
         # We can later make it checkpoint the stateful hooks

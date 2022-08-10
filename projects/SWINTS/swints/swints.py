@@ -30,6 +30,8 @@ from detectron2.modeling.backbone import PatchEmbed
 __all__ = ["SWINTS"]
 
 
+## 이미지 특징 추출기 -> 평균값
+## 이것도 proposal 피쳐 초기화임
 class ImgFeatExtractor(nn.Module):
     def __init__(self, cfg):
         super().__init__()
@@ -39,13 +41,30 @@ class ImgFeatExtractor(nn.Module):
     def forward(self, features):
         for i, f in enumerate(features):
             if i == 0:
+                # features[0]
+                # torch.Size([1, 256, 192, 240])
                 x = torch.mean(torch.mean(f, -1), -1) #self.img_feat_layer(f)
+                # x.shape
+                # torch.Size([1, 256])
+                
             else:
                 x_p = torch.mean(torch.mean(f, -1), -1) #self.img_feat_layer(f)
                 x = x + x_p
-
+        # x = 
+        # tensor([[ 3.9198e-01, -8.7791e-01, -2.5660e+00, -1.7946e+00,  3.0572e-01,
+                            # .........
+        #  -7.2503e-02, -8.4723e-02,  2.3512e+00, -3.7191e-01, -5.2184e-01,
+        #   6.2713e-02]], device='cuda:0', grad_fn=<AddBackward0>)
         img_feats = x.squeeze(-1).squeeze(-1).unsqueeze(1).repeat(1, self.cfg.MODEL.SWINTS.NUM_PROPOSALS, 1,)
-
+    #     tensor([[[ 0.3920, -0.8779, -2.5660,  ..., -0.3719, -0.5218,  0.0627],
+    #      [ 0.3920, -0.8779, -2.5660,  ..., -0.3719, -0.5218,  0.0627],
+    #      [ 0.3920, -0.8779, -2.5660,  ..., -0.3719, -0.5218,  0.0627],
+    #      ...,
+    #      [ 0.3920, -0.8779, -2.5660,  ..., -0.3719, -0.5218,  0.0627],
+    #      [ 0.3920, -0.8779, -2.5660,  ..., -0.3719, -0.5218,  0.0627],
+    #      [ 0.3920, -0.8779, -2.5660,  ..., -0.3719, -0.5218,  0.0627]]],
+    #    device='cuda:0', grad_fn=<RepeatBackward>)
+        
         del x_p
         del x
         
@@ -63,24 +82,45 @@ class SWINTS(nn.Module):
         self.device = torch.device(cfg.MODEL.DEVICE)
 
         self.in_features = cfg.MODEL.ROI_HEADS.IN_FEATURES
+        # cfg.MODEL.ROI_HEADS.IN_FEATURES ['p2', 'p3', 'p4', 'p5']
+        
         self.num_classes = cfg.MODEL.SWINTS.NUM_CLASSES
+        # cfg.MODEL.SWINTS.NUM_CLASSES 2
+        
+        
         self.num_proposals = cfg.MODEL.SWINTS.NUM_PROPOSALS
+        # cfg.MODEL.SWINTS.NUM_PROPOSALS 300
+        
         self.hidden_dim = cfg.MODEL.SWINTS.HIDDEN_DIM
+        # cfg.MODEL.SWINTS.HIDDEN_DIM 256
+        
         self.num_heads = cfg.MODEL.SWINTS.NUM_HEADS
+        #  cfg.MODEL.SWINTS.NUM_HEADS
 
         # Build Backbone.
         self.backbone = build_backbone(cfg)
+        # self.backbone 스윈 트랜스포머+FPN
+        
         self.size_divisibility = self.backbone.size_divisibility
+        # self.size_divisibility 32
         
         # Build Proposals.
         self.pos_embeddings = nn.Embedding(self.num_proposals, self.hidden_dim)
+        # self.pos_embeddings Embedding(300, 256)
         self.init_proposal_boxes = nn.Embedding(self.num_proposals, 4)
+        # self.init_proposal_boxes.shape = Embedding(300, 4)
+        
+        
         nn.init.constant_(self.init_proposal_boxes.weight[:, :2], 0.5)
         nn.init.constant_(self.init_proposal_boxes.weight[:, 2:], 1.0)
 
+
+
         # --------
+        ## 이미지 특징 추출기
         self.IFE = ImgFeatExtractor(cfg)
         self.mask_encoding = PCAMaskEncoding(cfg)
+        
         # encoding parameters.
         components_path = cfg.MODEL.SWINTS.PATH_COMPONENTS
         # update parameters.
@@ -92,11 +132,13 @@ class SWINTS(nn.Module):
         self.mask_encoding.explained_variances = explained_variances
         self.mask_encoding.means = means
         
-        # Build Dynamic Head.
+        # Build Dynamic Head. 디텍터, sparse r-cnn 에서 쓰이는 다이나믹 해드
         self.head = DynamicHead(cfg=cfg, roi_input_shape=self.backbone.output_shape())
 
         # Loss parameters:
         class_weight = cfg.MODEL.SWINTS.CLASS_WEIGHT
+        # cfg.MODEL.SWINTS.CLASS_WEIGHT 2.0
+        
         giou_weight = cfg.MODEL.SWINTS.GIOU_WEIGHT
         l1_weight = cfg.MODEL.SWINTS.L1_WEIGHT
         rec_weight = cfg.MODEL.SWINTS.REC_WEIGHT
@@ -148,33 +190,149 @@ class SWINTS(nn.Module):
 
                 * "height", "width" (int): the output resolution of the model, used in inference.
                   See :meth:`postprocess` for details.
-        """
+        """        
+        ## 픽셀 노말라이즈된 이미지, [이미지 너비,높이,너비,높이]
         images, images_whwh = self.preprocess_image(batched_inputs)
+        
+        # from torchvision import transforms
+        # pillow_img = transforms.ToPILImage()
+        # pillow_img(images.tensor[0]).save("./temp.png")
+        
+        ## 이미지를 텐서로 
         if isinstance(images, (list, torch.Tensor)):
             images = nested_tensor_from_tensor_list(images)
+        # images.tensor.shape
+        # torch.Size([1, 3, 768, 960])
 
+    
+        ## 백본네트워크를 통해 특징 추출
         # Feature Extraction.
         src = self.backbone(images.tensor)
+        # src['p2'].shape
+        # torch.Size([1, 256, 192, 240])
+        # src['p3'].shape
+        # torch.Size([1, 256, 96, 120])
+        # src['p4'].shape
+        # torch.Size([1, 256, 48, 60])
+        # src['p5'].shape
+        # torch.Size([1, 256, 24, 30])
+        # src['p6'].shape
+        # torch.Size([1, 256, 12, 15])
+        # 피라미드 p1은 안쓴 이유는? 계산값이 비싸서
+        
+
+
+        # Prepare Proposals.
+        proposal_boxes = self.init_proposal_boxes.weight.clone()
+        ## 센터 x,y, 박스 가로세로 비율
+    #     tensor([[0.5111, 0.5021, 0.9991, 0.9842],
+    #     [0.4948, 0.4812, 1.0185, 0.9961],
+    #     [0.4904, 0.4460, 1.0025, 1.0052],
+    #     ...,
+    #     [0.4827, 0.4773, 0.9672, 0.9317],
+    #     [0.5092, 0.4971, 0.9541, 0.9551],
+    #     [0.5253, 0.5356, 0.9979, 1.0019]], device='cuda:0',
+    #    grad_fn=<CloneBackward>)
+        # proposal_boxes torch.Size([300, 4])
+        
+        ## 센터좌표,너비,높이를 사각형 시작점(x1,y1),끝점(x2,y2)로 바꾸어줌
+        proposal_boxes = box_cxcywh_to_xyxy(proposal_boxes)
+        proposal_boxes = proposal_boxes[None] * images_whwh[:, None, :]
+        
 
         features = list()      
         for f in self.in_features:
             feature = src[f]
             features.append(feature)
-
-        # Prepare Proposals.
-        proposal_boxes = self.init_proposal_boxes.weight.clone()
-        proposal_boxes = box_cxcywh_to_xyxy(proposal_boxes)
-        proposal_boxes = proposal_boxes[None] * images_whwh[:, None, :]
-
+        
+        
+        ## 스윈트랜스포머에서 뽑아온 피쳐(features)를 p2,p3,p4를 평균값 취함
+        ## proposal_feats임 -> 포지션 임베딩까지 더해줘야함
+        ## 초기화는 이미지 피쳐를 평균값 + 더함 -> 복사 
         img_feats = self.IFE(features)
+        #img_feats =  torch.Size([1, 300, 256])
+        
+        
+        ## 배치사이즈
         bs = len(features[0])
+        
+        ## 포지션 임베딩 웨이트 복사
         pos_embeddings = self.pos_embeddings.weight[None].repeat(bs, 1, 1)
+        
+        ## 특징값 + 포지션 임베딩값 
         proposal_feats = img_feats + pos_embeddings
         
+        
+        
         del img_feats
+        
+        # self.training = False
         if self.training:
+            ## instance 자료 구조
+            ## 이미지 너비,높이, GT box 좌표,box/4나눈 좌표, GT 클래스(문자영역=0),마스크맵,문자            
             gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
+            ## 디텍트론 데이터셋에서 진짜 필요한 정보만 파싱
             targets = self.prepare_targets(gt_instances)
+            """ 
+            타겟 정보
+            dict_keys(['labels', 'boxes', 'boxes_xyxy', 'image_size_xyxy', 'image_size_xyxy_tgt', 'area', 'gt_masks', 'rec'])
+            
+            'labels': tensor([0, 0, 0, 0, 0, 0, 0], device='cuda:0')
+            
+            'boxes':
+            tensor([[0.3373, 0.3555, 0.0912, 0.1085],
+                    [0.4065, 0.4614, 0.1771, 0.1758],
+                    [0.5241, 0.5475, 0.1107, 0.1082],
+                    [0.6197, 0.5558, 0.1093, 0.1273],
+                    [0.7042, 0.5884, 0.0479, 0.0507],
+                    [0.7512, 0.6045, 0.0690, 0.0683],
+                    [0.7084, 0.6138, 0.0653, 0.0530]], device='cuda:0')
+                    
+                    
+            'boxes_xyxy':
+            tensor([[277.7254, 231.3336, 364.5794, 314.6411],
+                    [302.7027, 286.8394, 471.3041, 421.8863],
+                    [446.3011, 378.8896, 551.6727, 462.0249],
+                    [537.9084, 378.0179, 641.9225, 475.7526],
+                    [647.6205, 432.4008, 693.2263, 471.3675],
+                    [682.2961, 438.0428, 748.0281, 490.5096],
+                    [643.2863, 451.0175, 705.4629, 491.7579]], device='cuda:0')
+                    
+                    
+            'image_size_xyxy':
+            tensor([952., 768., 952., 768.], device='cuda:0')
+            
+            
+            'image_size_xyxy_tgt':
+            tensor([[952., 768., 952., 768.],
+                    [952., 768., 952., 768.],
+                    [952., 768., 952., 768.],
+                    [952., 768., 952., 768.],
+                    [952., 768., 952., 768.],
+                    [952., 768., 952., 768.],
+                    [952., 768., 952., 768.]], device='cuda:0')
+                    
+                    
+            'area':
+            tensor([ 7235.5894, 22769.1035,  8760.0947, 10165.7939,  1777.1068,  3448.7432,
+                    2533.0977], device='cuda:0')
+                    
+                    
+            'gt_masks':
+            tensor([[[0., 0., 0.,  ..., 0., 0., 0.],
+                    [0., 0., 0.,  ..., 0., 0., 0.],
+                    [0., 0., 0.,  ..., 0., 0., 0.],
+            
+                    [0., 0., 0.,  ..., 0., 0., 0.],
+                    [0., 0., 0.,  ..., 0., 0., 0.],
+                ...
+                
+            'rec':
+            tensor([[80, 77, 69,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+
+            """
+            
+            
             outputs_class, outputs_coord, outputs_mask,out_rec = self.head(features, proposal_boxes, proposal_feats, targets, mask_encoding=self.mask_encoding, matcher=self.matcher)
             output = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1], 'pred_masks': outputs_mask[-1], 'pred_rec': out_rec}
             if self.deep_supervision:

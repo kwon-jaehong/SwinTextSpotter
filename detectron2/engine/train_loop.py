@@ -137,6 +137,7 @@ class TrainerBase:
                 self.before_train()
                 for self.iter in range(start_iter, max_iter):
                     self.before_step()
+                    ## 학습 스탭
                     self.run_step()
                     self.after_step()
                 # self.iter == max_iter can be used by `after_train` to
@@ -162,6 +163,7 @@ class TrainerBase:
         # Maintain the invariant that storage.iter == trainer.iter
         # for the entire execution of each step
         self.storage.iter = self.iter
+        # self.iter
 
         for h in self._hooks:
             h.before_step()
@@ -225,7 +227,11 @@ class SimpleTrainer(TrainerBase):
         """
         If you want to do something with the data, you can wrap the dataloader.
         """
+        ## 데이터 찍어보기
         data = next(self._data_loader_iter)
+        
+        # print(data)
+        
         data_time = time.perf_counter() - start
 
         """

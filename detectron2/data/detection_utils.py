@@ -375,15 +375,24 @@ def annotations_to_instances(annos, image_size, mask_format="polygon"):
     boxes = [BoxMode.convert(obj["bbox"], obj["bbox_mode"], BoxMode.XYXY_ABS) for obj in annos]
     target = Instances(image_size)
     target.gt_boxes = Boxes(boxes)
+    
+    ## 박스 피쳐는 단순히 원좌표에서 1/4해준 좌표값임
     boxes_feat = [BoxMode.convert(obj["bbox"]/4, obj["bbox_mode"], BoxMode.XYXY_ABS) for obj in annos]
+    ## 고대로 들어감
     target.gt_boxes_feat = Boxes(boxes_feat)
+    
+    
+    ## 문자열 클래스 셋팅
     classes = [int(obj["category_id"]) for obj in annos]
     classes = torch.tensor(classes, dtype=torch.int64)
     target.gt_classes = classes
     
+    
     rec = [obj["rec"] for obj in annos]
     rec = torch.tensor(rec, dtype=torch.int64)
     target.rec = rec
+    
+    
     
     if len(annos) and "segmentation" in annos[0]:
         segms = [obj["segmentation"] for obj in annos]

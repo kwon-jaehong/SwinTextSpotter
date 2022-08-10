@@ -114,7 +114,10 @@ def setup(args):
 
 def main(args):
     cfg = setup(args)
-
+    # cfg['MODEL']['REC_HEAD']['BATCH_SIZE'] =16
+    # cfg['MODEL']['ROI_HEADS']['BATCH_SIZE_PER_IMAGE'] =16
+    # cfg['MODEL']['RPN']['BATCH_SIZE_PER_IMAGE'] =16
+    
     if args.eval_only:
         model = Trainer.build_model(cfg)
         DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(cfg.MODEL.WEIGHTS, resume=args.resume)

@@ -1,0 +1,8 @@
+env/
+datasets/
+data.tar.xz
+*.png
+*.pth
+*.pyc
+detectron2/
+detectron2.egg-info/

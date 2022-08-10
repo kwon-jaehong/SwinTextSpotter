@@ -56,6 +56,8 @@ class DynamicHead(nn.Module):
 
         # Build recognition heads
         self.rec_stage = REC_STAGE(cfg, self.hidden_dim, num_classes, dim_feedforward, nhead, dropout, activation)
+        
+        
         self.cnn = nn.Sequential(
                                 nn.Conv2d(self.hidden_dim, self.hidden_dim,3,1,1),
                                 nn.BatchNorm2d(self.hidden_dim),
@@ -65,10 +67,10 @@ class DynamicHead(nn.Module):
                                 nn.ReLU(True),
                                 )
 
-        #DC
+        #DC 
         self.conv = nn.ModuleList([
                            nn.Sequential(
-                           nn.Conv2d(self.hidden_dim, self.hidden_dim,3,1,2,2),
+                           nn.Conv2d(self.hidden_dim, self.hidden_dim,3,1,2,2), ## 마지막 인자가 dliate 커널 간격
                            nn.BatchNorm2d(self.hidden_dim),
                            nn.ReLU(True),                    
                            nn.Conv2d(self.hidden_dim, self.hidden_dim,3,1,4,4),              
@@ -141,6 +143,8 @@ class DynamicHead(nn.Module):
         )
         return box_pooler
    
+   
+   ## 인식기 가기전 피쳐 추출
     def extra_rec_feat(self, matcher, mask_encoding, targets, N, bboxes, class_logits, pred_bboxes, mask_logits, proposal_features, features):
         gt_masks = list()
         gt_boxes = list()
@@ -149,13 +153,21 @@ class DynamicHead(nn.Module):
         pred_mask = mask_logits.detach()
 
         N, nr_boxes = bboxes.shape[:2]
+        # (1, 300)
         if targets:
             output = {'pred_logits': class_logits, 'pred_boxes': pred_bboxes, 'pred_masks': mask_logits}
+            ## 헝가리안 알고리즘으로 매치
             indices = matcher(output, targets, mask_encoding)
             idx = _get_src_permutation_idx(indices)
+            
+            ## 타겟이 되는 문자열 가져옴 
             target_rec = torch.cat([t['rec'][i] for t, (_, i) in zip(targets, indices)], dim=0)
+            # torch.Size([7, 35])
+            
+            ## 2배로 복사
             target_rec = target_rec.repeat(2,1)
-        else:
+            # torch.Size([14, 35])
+        else: # 타겟이 없다면 들어감
             idx = None
             scores = torch.sigmoid(class_logits)
             labels = torch.arange(2, device=bboxes.device).\
@@ -166,9 +178,20 @@ class DynamicHead(nn.Module):
             inter_pred_label = []
         for b in range(N):
             if targets:
+                
+                ## 정답 박스, 정답 마스크맵 가져옴
                 gt_boxes.append(Boxes(targets[b]['boxes_xyxy'][indices[b][1]]))
                 gt_masks.append(targets[b]['gt_masks'][indices[b][1]])
+                
+                
+                ## 이떄까지 추출한 박스, 300개에서 가능성 있는-> 타겟에서 지정한 7개만 추출함
                 proposal_boxes_pred.append(Boxes(bboxes[b][indices[b][0]]))
+                # bboxes.shape
+                # torch.Size([1, 300, 4])
+                
+                # bboxes[b][indices[b][0]].shape
+                #  torch.Size([7, 4])
+                
                 tmp_mask = mask_encoding.decoder(pred_mask[b]).view(-1,28,28)
                 tmp_mask = tmp_mask[indices[b][0]]
                 tmp_mask2 = torch.full_like(tmp_mask,0).cuda()
@@ -198,8 +221,15 @@ class DynamicHead(nn.Module):
 
         # get recognition roi region
         if targets:
+            ## 정답 박스 ROI 풀링하고 피쳐를 뽑아옴
             gt_roi_features = self.box_pooler_rec(features, gt_boxes)
+            # gt_roi_features
+            # torch.Size([7, 256, 28, 28])
+            
+            ## 예측 박스 ROI 특징 추출
             pred_roi_features = self.box_pooler_rec(features, proposal_boxes_pred)
+            # torch.Size([7, 256, 28, 28])
+                        
             masks_pred = torch.cat(masks_pred).cuda()
             gt_masks = torch.cat(gt_masks).cuda()
             rec_map = torch.cat((gt_roi_features,pred_roi_features),0)
@@ -222,28 +252,53 @@ class DynamicHead(nn.Module):
             return inter_class_logits, inter_pred_bboxes, inter_pred_masks, inter_pred_label, proposal_features, gt_masks, idx, rec_map, nr_boxes
 
     def forward(self, features, init_bboxes, init_features, targets = None, mask_encoding = None, matcher=None):
-    
+        # head(features, proposal_boxes, proposal_feats, targets, mask_encoding=self.mask_encoding, matcher=self.matcher)
+        # features swin-transform + FPN 에서 뽑은 피쳐값 
+        # init_bboxes 초기화한 박스좌표
+        
+        
         inter_class_logits = []
         inter_pred_bboxes = []
         inter_pred_masks = []
         inter_pred_label = []
 
         bs = len(features[0])
+        
+        ## 초기 박스값 대입 
         bboxes = init_bboxes
+        
+        ## 초기 피쳐값 복사
         proposal_features = init_features.clone()
+        
+        
+        ## ROI 피쳐에 DC하고 + 컨캣시켜줌
+        ## receptive field를 최대한 보겟다는 뜻임
+        ## 디텍션 피쳐임
         for i_idx in range(len(features)):
            features[i_idx] = self.conv[i_idx](features[i_idx]) + features[i_idx]
-        for i, rcnn_head in enumerate(self.head_series):
+        
+        
 
+        for i, rcnn_head in enumerate(self.head_series):
+            ## RCNN head를 통해 proposal_features,bboxes 업데이트 됨
+            # len(self.head_series) = 6
             class_logits, pred_bboxes, proposal_features, mask_logits = rcnn_head(features, bboxes, proposal_features, self.box_pooler)
             if self.return_intermediate:
                 inter_class_logits.append(class_logits)
                 inter_pred_bboxes.append(pred_bboxes)
                 inter_pred_masks.append(mask_logits)
+                
             bboxes = pred_bboxes.detach()
         
+        
+        
         # extract recognition feature.
+        ## 인식기에 들어갈 특징을 추출 (배치사이즈,박스갯수)
         N, nr_boxes = bboxes.shape[:2]
+        # (1, 300)
+        
+        
+        ## 인식기 들어가기전 피쳐 추출 컨벌세이션
         if targets:
             proposal_features, gt_masks, idx, rec_map, target_rec = \
                 self.extra_rec_feat(matcher, mask_encoding, targets, N, bboxes, class_logits, pred_bboxes, mask_logits, proposal_features, features)
@@ -252,6 +307,9 @@ class DynamicHead(nn.Module):
                 self.extra_rec_feat(matcher, mask_encoding, targets, N, bboxes, class_logits, pred_bboxes, mask_logits, proposal_features, features)
        
         rec_map = self.cnn(rec_map)
+        
+        
+        
         rec_proposal_features = proposal_features.clone()
 
         if targets:
@@ -329,7 +387,11 @@ class RCNNHead(nn.Module):
         :param bboxes: (N, nr_boxes, 4)
         :param pro_features: (N, nr_boxes, d_model)
         """
-
+        
+        # bboxes
+        # torch.Size([1, 300, 4])
+        
+        # 배치, 박스
         N, nr_boxes = bboxes.shape[:2]
         
         # roi_feature.
