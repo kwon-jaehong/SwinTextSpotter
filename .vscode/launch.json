@@ -10,7 +10,8 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "args": ["--num-gpus", "1","--config-file","projects/SWINTS/configs/SWINTS-swin-pretrain.yaml"],
+            // "args": ["--num-gpus", "1","--config-file","projects/SWINTS/configs/SWINTS-swin-pretrain.yaml"],        
+            "args": ["--num-gpus", "1","--config-file","projects/SWINTS/configs/SWINTS-swin-finetune-totaltext.yaml","--eval-only","MODEL.WEIGHTS","./tt_model_final.pth"],
             "justMyCode": true
         }
     ]

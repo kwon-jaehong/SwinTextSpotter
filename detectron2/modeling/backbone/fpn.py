@@ -123,23 +123,38 @@ class FPN(Backbone):
                 paper convention: "p<stage>", where stage has stride = 2 ** stage e.g.,
                 ["p2", "p3", ..., "p6"].
         """
+        ## swin 트랜스포머 4스테이지 [96, 192, 384, 768]
         bottom_up_features = self.bottom_up(x)
+        # bottom_up_features['stage2'].shape = torch.Size([1, 96, 192, 240]) # 채널수 32배수
+        # bottom_up_features['stage3'].shape = torch.Size([1, 192, 96, 120]) # 채널수 2배
+        # bottom_up_features['stage4'].shape = torch.Size([1, 384, 48, 60])  # 채널수 2배
+        # bottom_up_features['stage5'].shape = torch.Size([1, 768, 24, 30])  # 채널수 2배
+        
         results = []
+        ## stage5 피쳐를 먼저 뽑아줌
         prev_features = self.lateral_convs[0](bottom_up_features[self.in_features[-1]])
         results.append(self.output_convs[0](prev_features))
-
+        # prev_features = torch.Size([1, 256, 24, 30])
+        
+        
         # Reverse feature maps into top-down order (from low to high resolution)
-        for idx, (lateral_conv, output_conv) in enumerate(
-            zip(self.lateral_convs, self.output_convs)
-        ):
+        for idx, (lateral_conv, output_conv) in enumerate(zip(self.lateral_convs, self.output_convs)):
             # Slicing of ModuleList is not supported https://github.com/pytorch/pytorch/issues/47336
             # Therefore we loop over all modules but skip the first one
             if idx > 0:
+                ## stage 4부터 차레대로
                 features = self.in_features[-idx - 1]
+                ## stage 텐서값 가져옴
                 features = bottom_up_features[features]
+                
+                # prev_features = torch.Size([1, 256, 24, 30])
                 top_down_features = F.interpolate(prev_features, scale_factor=2.0, mode="nearest")
+                # prev_features = torch.Size([1, 256, 48, 60])
+                
                 lateral_features = lateral_conv(features)
                 prev_features = lateral_features + top_down_features
+                
+                ## 여기 안들어 감
                 if self._fuse_type == "avg":
                     prev_features /= 2
                 results.insert(0, output_conv(prev_features))
@@ -150,6 +165,7 @@ class FPN(Backbone):
             else:
                 top_block_in_feature = results[self._out_features.index(self.top_block.in_feature)]
             results.extend(self.top_block(top_block_in_feature))
+            # p5인 탑블럭 쉐이프, 맥스풀링, CNN torch.Size([1, 256, 12, 15])
         assert len(self._out_features) == len(results)
         return {f: res for f, res in zip(self._out_features, results)}
 

@@ -29,6 +29,7 @@ def assign_boxes_to_levels(
     """
     Map each box in `box_lists` to a feature map level index and return the assignment
     vector.
+    # `box_lists`의 각 상자를 기능 맵 수준 인덱스에 매핑하고 할당을 반환합니다.
 
     Args:
         box_lists (list[Boxes] | list[RotatedBoxes]): A list of N Boxes or N RotatedBoxes,
@@ -203,7 +204,9 @@ class ROIPooler(nn.Module):
                 boxes aggregated over all N batch images and C is the number of channels in `x`.
         """
         num_level_assignments = len(self.level_poolers)
-
+        # len(self.level_poolers) = 4
+        
+        # 박스 없었을경우 전처리
         assert isinstance(x, list) and isinstance(
             box_lists, list
         ), "Arguments to pooler must be lists"
@@ -222,8 +225,13 @@ class ROIPooler(nn.Module):
             return torch.zeros(
                 (0, x[0].shape[1]) + self.output_size, device=x[0].device, dtype=x[0].dtype
             )
+            
+        ## 여기까지 박스 없었을경우 전처리
 
+        
+        ## 박스 좌표 변환 cx,cy,w,h -> x1,y1,x2,y2
         pooler_fmt_boxes = convert_boxes_to_pooler_format(box_lists)
+        # box_lists[0].tensor.shape = torch.Size([300, 4])
 
         if num_level_assignments == 1:
             return self.level_poolers[0](x[0], pooler_fmt_boxes)
@@ -231,6 +239,24 @@ class ROIPooler(nn.Module):
         level_assignments = assign_boxes_to_levels(
             box_lists, self.min_level, self.max_level, self.canonical_box_size, self.canonical_level
         )
+        # canonical_box_size 표준 상자크기를 지정 224
+        # canonical_level 표준 피쳐맵 레벨 4
+        # self.min_level, self.max_level (2, 5)
+        
+        # level_assignments =  tensor([3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        # 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        # 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        # 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        # 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        # 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        # 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        # 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        # 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        # 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        # 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        # 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        # 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3], device='cuda:0')
+        
 
         num_boxes = pooler_fmt_boxes.size(0)
         num_channels = x[0].shape[1]
@@ -248,11 +274,19 @@ class ROIPooler(nn.Module):
             output = torch.zeros(
                 (num_boxes, num_channels, output_size, output_size1), dtype=dtype, device=device
             )
+            # output[0].shape = torch.Size([256, 7, 7])
 
+
+        ## 3레벨만 ROI aligen함
         for level, pooler in enumerate(self.level_poolers):
             inds = nonzero_tuple(level_assignments == level)[0]
+            # pooler_fmt_boxes-> 좌표임
             pooler_fmt_boxes_level = pooler_fmt_boxes[inds]
+            
             # Use index_put_ instead of advance indexing, to avoid pytorch/issues/49852
             output.index_put_((inds,), pooler(x[level], pooler_fmt_boxes_level))
 
+            # x[3].shape = torch.Size([1, 256, 24, 30])
+
         return output
+        # output.shape = torch.Size([300, 256, 7, 7])

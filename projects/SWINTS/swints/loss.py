@@ -97,6 +97,8 @@ class SetCriterion(nn.Module):
         losses['loss_dice'] = loss.sum() / num_boxes
 
         return losses
+    
+    ## NLL 로스구함
     def loss_rec(self, outputs, targets, indices, num_boxes, mask_encoding):
         """Classification loss (NLL)
         targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]

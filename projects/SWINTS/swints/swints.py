@@ -132,7 +132,7 @@ class SWINTS(nn.Module):
         self.mask_encoding.explained_variances = explained_variances
         self.mask_encoding.means = means
         
-        # Build Dynamic Head. 디텍터, sparse r-cnn 에서 쓰이는 다이나믹 해드
+        # Build Dynamic Head.
         self.head = DynamicHead(cfg=cfg, roi_input_shape=self.backbone.output_shape())
 
         # Loss parameters:
@@ -271,7 +271,7 @@ class SWINTS(nn.Module):
             ## instance 자료 구조
             ## 이미지 너비,높이, GT box 좌표,box/4나눈 좌표, GT 클래스(문자영역=0),마스크맵,문자            
             gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
-            ## 디텍트론 데이터셋에서 진짜 필요한 정보만 파싱
+            ## 데이터셋에서 진짜 필요한 정보만 파싱 (기본이 디텍트론데이터셋형식을 따름)
             targets = self.prepare_targets(gt_instances)
             """ 
             타겟 정보
@@ -365,8 +365,13 @@ class SWINTS(nn.Module):
                 r = detector_postprocess(results_per_image, height, width)
                 processed_results.append({"instances": r})
             
+            # import cv2
+            # img = cv2.imread(batched_inputs[0]['file_name'])
+            
+            
             return processed_results
 
+    # 데이터셋에서 필요한 정보만 가져오기
     @torch.no_grad()
     def prepare_targets(self, targets):
         new_targets = []

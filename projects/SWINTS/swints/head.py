@@ -57,7 +57,7 @@ class DynamicHead(nn.Module):
         # Build recognition heads
         self.rec_stage = REC_STAGE(cfg, self.hidden_dim, num_classes, dim_feedforward, nhead, dropout, activation)
         
-        
+        ## 인식기 들어가기전 정보 컨볼루젼
         self.cnn = nn.Sequential(
                                 nn.Conv2d(self.hidden_dim, self.hidden_dim,3,1,1),
                                 nn.BatchNorm2d(self.hidden_dim),
@@ -273,7 +273,6 @@ class DynamicHead(nn.Module):
         
         ## ROI 피쳐에 DC하고 + 컨캣시켜줌
         ## receptive field를 최대한 보겟다는 뜻임
-        ## 디텍션 피쳐임
         for i_idx in range(len(features)):
            features[i_idx] = self.conv[i_idx](features[i_idx]) + features[i_idx]
         
@@ -305,10 +304,13 @@ class DynamicHead(nn.Module):
         else:
             inter_class_logits, inter_pred_bboxes, inter_pred_masks, inter_pred_label, proposal_features, gt_masks, idx, rec_map, nr_boxes = \
                 self.extra_rec_feat(matcher, mask_encoding, targets, N, bboxes, class_logits, pred_bboxes, mask_logits, proposal_features, features)
-       
+        
+        
+        # 인식기 들어가기전
+       # torch.Size([14, 256, 28, 28])
         rec_map = self.cnn(rec_map)
-        
-        
+        #    rec_map
+        # torch.Size([14, 256, 28, 28])
         
         rec_proposal_features = proposal_features.clone()
 
@@ -320,6 +322,7 @@ class DynamicHead(nn.Module):
         if self.return_intermediate:
             return torch.stack(inter_class_logits), torch.stack(inter_pred_bboxes), torch.stack(inter_pred_masks), rec_result
         return class_logits[None], pred_bboxes[None], mask_logits[None]
+
 
 
 class RCNNHead(nn.Module):
@@ -394,16 +397,29 @@ class RCNNHead(nn.Module):
         # 배치, 박스
         N, nr_boxes = bboxes.shape[:2]
         
-        # roi_feature.
+        # 제안 박스 좌표 가져옴
         proposal_boxes = list()
         for b in range(N):
             proposal_boxes.append(Boxes(bboxes[b]))
+            
+        ## 박스좌표 + 이미지 FPN 전체맵을 넣음
+        ## FPN -> DC 피쳐맵 3레벨에서 박스좌표 ROI 풀링값 가져옴
         roi_features = pooler(features, proposal_boxes)
+        # roi_features.shape  torch.Size([300, 256, 7, 7])
+        
         roi_features = roi_features.view(N * nr_boxes, self.d_model, -1).permute(2, 0, 1)        
-
-        # self_att.
+        # roi_features = torch.Size([49, 300, 256])
+        ## 박스 7*7정보를 49로 쫙 펴줌
+        
+        
+        ## 논문 그림 4 내용임
+        # self_att. 
         pro_features = pro_features.view(N, nr_boxes, self.d_model).permute(1, 0, 2)
+        # pro_features.shape = torch.Size([300, 1, 256])
+        
         pro_features2 = self.self_attn(pro_features, pro_features, value=pro_features)[0]
+        # torch.Size([300, 1, 256])
+        
         pro_features = pro_features + self.dropout1(pro_features2)
 
         del pro_features2
@@ -413,12 +429,15 @@ class RCNNHead(nn.Module):
         # inst_interact.
         pro_features = pro_features.view(nr_boxes, N, self.d_model).permute(1, 0, 2).reshape(1, N * nr_boxes, self.d_model)
         pro_features2 = self.inst_interact(pro_features, roi_features)
+        # DynamicConv 라는 연산을 사용함
+        # roi_features.shape = torch.Size([49, 300, 256])
         pro_features = pro_features + self.dropout2(pro_features2)
+
 
         del pro_features2
 
-        obj_features = self.norm2(pro_features)
 
+        obj_features = self.norm2(pro_features)
         # obj_feature.
         obj_features2 = self.linear2(self.dropout(self.activation(self.linear1(obj_features))))
         obj_features = obj_features + self.dropout3(obj_features2)
@@ -426,15 +445,21 @@ class RCNNHead(nn.Module):
         del obj_features2
 
         obj_features = self.norm3(obj_features)
+        # obj_features.shape = torch.Size([1, 300, 256])
+        
         
         fc_feature = obj_features.transpose(0, 1).reshape(N * nr_boxes, -1)
+        # fc_feature = torch.Size([300, 256])
+        
+        
         cls_feature = fc_feature.clone()
         reg_feature = fc_feature.clone()
-
         mask_feature = fc_feature.clone()
+        
 
         del fc_feature
 
+        ## fc_feature를 복사해서 ,mask, 클래스, 박스좌표 얻어옴
         for mask_layer in self.mask_module:
             mask_feature = mask_layer(mask_feature)
         mask_logits = self.mask_logits(mask_feature)
@@ -444,8 +469,15 @@ class RCNNHead(nn.Module):
             cls_feature = cls_layer(cls_feature)
         for reg_layer in self.reg_module:
             reg_feature = reg_layer(reg_feature)
+            
         class_logits = self.class_logits(cls_feature)
+        # class_logits.shape  torch.Size([300, 2])
+        
         bboxes_deltas = self.bboxes_delta(reg_feature)
+        # bboxes_deltas.shape  torch.Size([300, 4])
+        
+        ## 박스 좌표는 bboxes_deltas로 이동시킴
+        
 
         del cls_feature
         del reg_feature
@@ -464,6 +496,10 @@ class RCNNHead(nn.Module):
                 deltas[i] represents k potentially different class-specific
                 box transformations for the single box boxes[i].
             boxes (Tensor): boxes to transform, of shape (N, 4)
+            델타(텐서): 형상의 변환 델타(N, k*4)이며, 여기서 k > = 1입니다.
+            델타[i]는 잠재적으로 다른 클래스별 k를 나타냅니다.
+            단일 상자[i]에 대한 상자 변환.
+            상자(텐서): 변환할 상자, 모양(N, 4)
         """
         boxes = boxes.to(deltas.dtype)
 
@@ -523,15 +559,30 @@ class DynamicConv(nn.Module):
         roi_features: (49, N * nr_boxes, self.d_model)
         '''
         features = roi_features.permute(1, 0, 2)
+        # features.shape = torch.Size([300, 49, 256])        
+        
+        
         parameters = self.dynamic_layer(pro_features).permute(1, 0, 2)
+        # torch.Size([300, 1, 32768])
+
 
         param1 = parameters[:, :, :self.num_params].view(-1, self.hidden_dim, self.dim_dynamic)
+        # param1.shape torch.Size([300, 256, 64])
+
+        
         param2 = parameters[:, :, self.num_params:].view(-1, self.dim_dynamic, self.hidden_dim)
+        # param2.shape = torch.Size([300, 64, 256])
+
 
         del parameters
 
+        # bmm Batch Matrix Multiplication 배치 행렬곱 연산
         features = torch.bmm(features, param1)
-
+        # features.shape = torch.Size([300, 49, 256]) (Batch Matrix Multiplication )
+        # param1.shape = torch.Size([300, 256, 64])
+        # 연산후 features torch.Size([300, 49, 64])
+        
+        
         del param1
 
         features = self.norm1(features)
@@ -550,6 +601,7 @@ class DynamicConv(nn.Module):
         features = self.activation(features)
 
         return features
+        # torch.Size([300, 256])
 
 def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
