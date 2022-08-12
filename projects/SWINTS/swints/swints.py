@@ -222,9 +222,8 @@ class SWINTS(nn.Module):
         
 
 
-        # Prepare Proposals.
+        # Prepare Proposals.센터좌표 x,y, 박스 가로세로 비율
         proposal_boxes = self.init_proposal_boxes.weight.clone()
-        ## 센터 x,y, 박스 가로세로 비율
     #     tensor([[0.5111, 0.5021, 0.9991, 0.9842],
     #     [0.4948, 0.4812, 1.0185, 0.9961],
     #     [0.4904, 0.4460, 1.0025, 1.0052],
@@ -240,13 +239,15 @@ class SWINTS(nn.Module):
         proposal_boxes = proposal_boxes[None] * images_whwh[:, None, :]
         
 
+
+        ## p6는 안씀
         features = list()      
         for f in self.in_features:
             feature = src[f]
             features.append(feature)
         
         
-        ## 스윈트랜스포머에서 뽑아온 피쳐(features)를 p2,p3,p4,p5,p6를 평균값 취함
+        ## 스윈트랜스포머에서 뽑아온 피쳐(features)를 p2,p3,p4,p5를 평균값 취함
         ## proposal_feats임 -> 포지션 임베딩까지 더해줘야함
         ## 초기화는 이미지 피쳐를 평균값 + 더함 -> 복사 
         img_feats = self.IFE(features)
@@ -354,7 +355,7 @@ class SWINTS(nn.Module):
             mask_pred = output["pred_masks"].unsqueeze(dim=2)
             results = Instances(images.image_sizes[0])
             results.pred_boxes = Boxes(box_pred)
-            results.scores = box_cls
+            results.scores = box_cls # 박스 클래스가 문자열 디텍션 점수같은 개념
             results.pred_masks = mask_pred.squeeze(1)
             results.pred_rec = out_rec
             results = [results]
@@ -364,7 +365,6 @@ class SWINTS(nn.Module):
                 width = input_per_image.get("width", image_size[1])
                 r = detector_postprocess(results_per_image, height, width)
                 processed_results.append({"instances": r})
-            
             # import cv2
             # img = cv2.imread(batched_inputs[0]['file_name'])
             

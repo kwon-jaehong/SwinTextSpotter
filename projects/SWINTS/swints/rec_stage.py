@@ -95,15 +95,21 @@ class REC_STAGE(nn.Module):
         num_channels = d_model
         in_channels = d_model
         mode = 'nearest'
+        
+        ## 다운 샘플링
         self.k_encoder = nn.Sequential(
             encoder_layer(num_channels, num_channels, s=(2, 2)),
             encoder_layer(num_channels, num_channels, s=(2, 2))
         )
+        
+        ## 업샘플링 
         self.k_decoder_det = nn.Sequential(
             decoder_layer_worelu(num_channels, num_channels, scale_factor=2, mode=mode),
             decoder_layer_worelu(num_channels, num_channels, scale_factor=2, mode=mode),
             decoder_layer(num_channels, in_channels, size=(self.feat_size[0], self.feat_size[1]), mode=mode)
         )
+        
+        ## 업샘플링 
         self.k_decoder_rec = nn.Sequential(
             decoder_layer(num_channels, num_channels, scale_factor=2, mode=mode),
             decoder_layer(num_channels, num_channels, scale_factor=2, mode=mode),
@@ -117,19 +123,40 @@ class REC_STAGE(nn.Module):
         :param bboxes: (N, nr_boxes, 4)
         :param pro_features: (N, nr_boxes, d_model)
         """
+        # roi_features = torch.Size([14, 256, 28, 28])
+        # pro_features = torch.Size([1, 300, 256])
+        # gt_masks  = torch.Size([14, 28, 28])
+        # N, nr_boxes, (1, 300)
+        
+        # ROI 특징을 encode한다
         features = []
         k = roi_features
+        
+        ## roi_features 피쳐 다운샘플링
         for i in range(0, len(self.k_encoder)):
             k = self.k_encoder[i](k)
             features.append(k)
+        # features[0].shape
+        # torch.Size([100, 256, 14, 14])
+        # features[1].shape
+        # torch.Size([100, 256, 7, 7])
+        
+        
         n,c,h,w = k.size()
         k = k.view(n, c, -1).permute(2, 0, 1)
+        # k.shape = torch.Size([49, 14, 256])
+        # 인퍼런스-> torch.Size([49, 100, 256])
         
-        
-       # self_att.
+       # 박스 * 256 정보 셀프 어텐션 self_att.
         pro_features = pro_features.view(N, nr_boxes, self.d_model).permute(1, 0, 2)
+        # self.d_model=256
+        # pro_features.shape = torch.Size([100, 1, 256])
+        
         pro_features2 = self.self_attn(pro_features, pro_features, value=pro_features)[0]
+        
+        
         pro_features = pro_features + self.dropout1(pro_features2)
+
 
         del pro_features2
 
@@ -141,14 +168,18 @@ class REC_STAGE(nn.Module):
             pro_features = pro_features.repeat(2,1)[:self.rec_batch_size]
         else:
             pro_features = pro_features.permute(1, 0, 2)
+            # torch.Size([1, 100, 256])
         pro_features = pro_features.reshape(1, -1, self.d_model)
         pro_features2 = self.inst_interact(pro_features, k)
         pro_features = k.permute(1,0,2) + self.dropout2(pro_features2)
 
         del pro_features2
 
+        ## 어텐션 끝나고 norm2 해주고 오브젝트 
         obj_features = self.norm2(pro_features)
-
+        # obj_features.shape = torch.Size([100, 49, 256])
+        
+        
    #     # obj_feature.
         obj_features2 = self.linear2(self.dropout(self.activation(self.linear1(obj_features))))
         obj_features = obj_features + self.dropout3(obj_features2)
@@ -157,6 +188,10 @@ class REC_STAGE(nn.Module):
         obj_features = self.norm3(obj_features)
         obj_features = obj_features.permute(1,0,2)
         obj_features = self.pos_encoder(obj_features)
+        
+        ## 트랜스 포머 인코더에 넣어줌
+        # obj_features -> d1
+        # k => roi_features -> 박스 피쳐 a3
         obj_features = self.transformer_encoder(obj_features)
         obj_features = obj_features.permute(1,2,0)
         n,c,w = obj_features.shape
@@ -164,28 +199,62 @@ class REC_STAGE(nn.Module):
         obj_features = obj_features
         k = k.permute(1,2,0)
         k = k.view(n,c,self.feat_size[0]//4,self.feat_size[1]//4)
+        # 첫번째 피쳐
         k_rec = k*obj_features.sigmoid()
+        
+        
+        
+        ## 업샘플링 하고 r1
         k_rec = self.k_decoder_rec[0](k_rec)
+        # a2랑 더함
         k_rec = k_rec + features[0]
-
+        
+        
         k_det = obj_features
+        # 디코더 안에 업 샘플링 진행
         k_det = self.k_decoder_det[0](k_det)
         k_det = k_det + features[0]
         k_rec = k_rec * k_det.sigmoid()
+        # r2
+        
 
         k_rec = self.k_decoder_rec[1](k_rec) + roi_features
         k_det = self.k_decoder_det[1](k_det) + roi_features
         k_rec = k_rec * k_det.sigmoid()
-
+        # r3
+        # k_rec.shape = torch.Size([100, 256, 28, 28])
+        
+        
+        ## 업샘플링 28,28고정되어있음 -> 그냥 쉐이프 맞춰주는 용도
         k_rec = self.k_decoder_det[-1](k_rec)
         k_rec = k_rec.flatten(-2,-1).permute(0,2,1)
+        # k_rec.shape = torch.Size([100, 784, 256])
+        
+        ## 인식기
         k_rec = self.TLSAM(k_rec)
+        #k_rec =  torch.Size([100, 784, 256])
         k_rec = k_rec.permute(0,2,1).view(n,c,self.feat_size[0],self.feat_size[1])
+        #k_rec =  torch.Size([100, 256, 28, 28])
+        
+        ## 마스크 업샘플링 28
         gt_masks = self.rescale(gt_masks.unsqueeze(1))
+        # gt_masks = torch.Size([100, 28, 28])
+        
         k_rec = k_rec*gt_masks
+        
+        ## k_rec값 디코더 -> 어텐션 벡터 뽑음
         attn_vecs = self.seq_decoder(k_rec, targets, targets)
+    #     attn_vecs[0].shape
+    #     array([69, 70, 84, 85, 83, 80, 68, 76, 74, 79, 72,  0,  0,  0,  0,  0,  0,
+    #     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+    #     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+    #     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+    #     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+    #     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0],
+    #   dtype=int32)
+        
+        
         return attn_vecs
-    
 
 def encoder_layer(in_c, out_c, k=3, s=2, p=1):
     return nn.Sequential(nn.Conv2d(in_c, out_c, k, s, p),
